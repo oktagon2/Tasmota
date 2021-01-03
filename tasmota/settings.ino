@@ -1047,6 +1047,7 @@ void SettingsDefaultSet2(void)
   flag4.zb_index_ep |= ZIGBEE_INDEX_EP;
   flag4.mqtt_tls |= MQTT_TLS_ENABLED;
   flag4.mqtt_no_retain |= MQTT_NO_RETAIN;
+  flag4.only_json_message |= MQTT_ONLY_JSON_MESSAGE;
 
 #ifdef USER_TEMPLATE
   String user_template = USER_TEMPLATE;

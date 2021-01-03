@@ -211,6 +211,8 @@ void MqttUnsubscribeLib(const char *topic)
 
 bool MqttPublishLib(const char* topic, bool retained)
 {
+  // HINWEIS: Geloggt wird der Parameter topic im Originalzustand. Macht man hier Änderungen am topic
+  //          so sind die also im Log nicht sichtbar!
   // If Prefix1 equals Prefix2 disable next MQTT subscription to prevent loop
   if (!strcmp(SettingsText(SET_MQTTPREFIX1), SettingsText(SET_MQTTPREFIX2))) {
     char *str = strstr(topic, SettingsText(SET_MQTTPREFIX1));
@@ -236,6 +238,24 @@ void MqttDataHandler(char* mqtt_topic, uint8_t* mqtt_data, unsigned int data_len
 #ifdef USE_DEBUG_DRIVER
   ShowFreeMem(PSTR("MqttDataHandler"));
 #endif
+
+#ifdef USE_MQTT_AZURE_IOT
+  // change_mqtt_topic to /command
+  // remove /command from mqtt_data
+
+  char* mqtt_data_text= (char*)mqtt_data;
+
+  mqtt_topic= mqtt_data_text;
+  while( !isspace(*mqtt_data_text)) {
+      mqtt_data_text++;
+      data_len--;
+  }
+  *mqtt_data_text++= 0;
+  data_len--;
+
+  mqtt_data= (uint8_t*)mqtt_data_text;
+#endif
+
 
   // Do not allow more data than would be feasable within stack space
   if (data_len >= MQTT_MAX_PACKET_SIZE) { return; }
@@ -319,6 +339,41 @@ void MqttPublish(const char* topic, bool retained)
   sretained[0] = '\0';
   char slog_type[20];
   snprintf_P(slog_type, sizeof(slog_type), PSTR(D_LOG_RESULT));
+
+
+#ifdef USE_MQTT_AZURE_IOT
+    std::string fullTopicString(topic);
+
+    size_t posPTag = fullTopicString.find("|p|");
+    size_t posTTag = fullTopicString.find("|t|");
+    size_t posSTag = fullTopicString.find("|s|");
+
+    std::string prefixString(fullTopicString.substr(posPTag + 3, posTTag - posPTag - 3));
+    std::string topicString(fullTopicString.substr(posTTag + 3, posSTag - posTTag - 3));
+    std::string subTopicString(fullTopicString.substr(posSTag + 3));
+
+    size_t l = strlen(TasmotaGlobal.mqtt_data);
+    size_t offset= l;
+    const char* strToAdd = " {";
+    if (l == 0)
+    {
+        strToAdd = "{";
+    }
+    else
+    {
+        if (l >= 2)
+        {
+            if ((TasmotaGlobal.mqtt_data[0] == '{') && (TasmotaGlobal.mqtt_data[l - 1] == '}'))
+            {
+                offset-= 1;
+                strToAdd = ",";
+            }
+        }
+    }
+    sprintf_P(TasmotaGlobal.mqtt_data + offset, "%s\"Prefix\":\"%s\",\"SubTopic\":\"%s\"}",
+        strToAdd, prefixString.c_str(), subTopicString.c_str());
+    topic= topicString.c_str();
+#endif
 
   if (Settings.flag.mqtt_enabled) {  // SetOption3 - Enable MQTT
     if (MqttPublishLib(topic, retained)) {
@@ -511,15 +566,21 @@ void MqttConnected(void)
     GetTopic_P(stopic, TELE, TasmotaGlobal.mqtt_topic, S_LWT);
     Response_P(PSTR(MQTT_LWT_ONLINE));
     MqttPublish(stopic, true);
-
     if (!Settings.flag4.only_json_message) {  // SetOption90 - Disable non-json MQTT response
       // Satisfy iobroker (#299)
       ResponseClear();
       MqttPublishPrefixTopic_P(CMND, S_RSLT_POWER);
     }
 
+#ifdef USE_MQTT_AZURE_IOT
+    strcpy(stopic, TasmotaGlobal.mqtt_topic);
+    strcat(stopic, "devicebound/#");
+#else
     GetTopic_P(stopic, CMND, TasmotaGlobal.mqtt_topic, PSTR("#"));
+#endif
     MqttSubscribe(stopic);
+ 
+ #ifndef USE_MQTT_AZURE_IOT
     if (strstr_P(SettingsText(SET_MQTT_FULLTOPIC), MQTT_TOKEN_TOPIC) != nullptr) {
       uint32_t real_index = SET_MQTT_GRP_TOPIC;
       for (uint32_t i = 0; i < MAX_GROUP_TOPICS; i++) {
@@ -532,7 +593,7 @@ void MqttConnected(void)
       GetFallbackTopic_P(stopic, PSTR("#"));
       MqttSubscribe(stopic);
     }
-
+#endif
     XdrvCall(FUNC_MQTT_SUBSCRIBE);
   }
 
@@ -563,7 +624,7 @@ void MqttConnected(void)
       ResponseJsonEnd();
       MqttPublishPrefixTopic_P(TELE, PSTR(D_RSLT_INFO "3"));
     }
-
+ 
     MqttPublishAllPowerState();
     if (Settings.tele_period) {
       TasmotaGlobal.tele_period = Settings.tele_period -5;  // Enable TelePeriod in 5 seconds
